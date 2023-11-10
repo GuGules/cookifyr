@@ -1,1 +1,3 @@
+![Logo](logo.svg)
+
 # cookifyr
