@@ -4,9 +4,13 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/GuGules/cookifyr/internal/apperror"
 	"github.com/GuGules/cookifyr/internal/config"
+	custommiddleware "github.com/GuGules/cookifyr/internal/middleware"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/jmoiron/sqlx"
+	_ "github.com/lib/pq"
 )
 
 type Server struct {
@@ -26,21 +30,40 @@ func (s *Server) Serve() error {
 	return http.ListenAndServe(s.Addr, s.Router)
 }
 
-func configureServer(s *Server) {
+func configureServer(s *Server, db *sqlx.DB) {
 	s.Router.Use(middleware.Logger)
-	s.Router.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("welcome"))
-	})
+	s.Router.Use(custommiddleware.InjectDatabase(db))
+}
+
+func ToHttpHandler(handlerWithError func(w http.ResponseWriter, r *http.Request) error) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		errHandle := handlerWithError(w, r)
+
+		if errHandle != nil {
+			appError, isAppError := errHandle.(apperror.AppError)
+			if !isAppError {
+				appError = apperror.NewInternalServerError()
+			}
+
+			http.Error(w, appError.Msg, appError.Status)
+		}
+	}
 }
 
 func main() {
-	var config, errConfig = config.NewFromEnv()
+	config, errConfig := config.NewFromEnv()
 
 	if errConfig != nil {
 		log.Fatalf("cookifyr: %s", errConfig)
 	}
 
+	db, errDb := sqlx.Connect(config.DbDriver, config.DbConnString)
+
+	if errDb != nil {
+		log.Fatalf("cookifyr: %s", errDb)
+	}
+
 	s := NewServer(config.HttpAddress)
-	configureServer(s)
+	configureServer(s, db)
 	s.Serve()
 }
